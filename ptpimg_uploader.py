@@ -42,8 +42,6 @@ class PtpimgUploader:
     def _perform(self, resp):
         if resp.status_code == requests.codes.ok:
             try:
-                # print('Successful response', r.json())
-                # r.json() is like this: [{'code': 'ulkm79', 'ext': 'jpg'}]
                 return [self._handle_result(r) for r in resp.json()]
             except ValueError as e:
                 raise UploadFailed(
@@ -61,7 +59,6 @@ class PtpimgUploader:
 
     def upload_file(self, filename):
         """ Upload file using form """
-        # The ExitStack closes files for us when the with block exits
         with contextlib.ExitStack() as stack:
             open_file = stack.enter_context(open(filename, 'rb'))
             mime_type, _ = mimetypes.guess_type(filename)
@@ -71,8 +68,6 @@ class PtpimgUploader:
 
             name = os.path.basename(filename)
             try:
-                # until https://github.com/shazow/urllib3/issues/303 is
-                # resolved, only use the filename if it is Latin-1 safe
                 e_name = name.encode('latin-1', 'replace')
                 name = e_name.decode('latin-1')
             except UnicodeEncodeError:
@@ -125,13 +120,15 @@ def upload(api_key, files_or_urls, timeout=None):
     uploader = PtpimgUploader(api_key, timeout)
     file_url_list = _partition(files_or_urls)
     results = []
+    local_files = []  # Track local files for deletion
     if file_url_list:
         for file_or_url in file_url_list:
             if file_or_url['type'] == 'file':
                 results += uploader.upload_file(file_or_url['path'])
+                local_files.append(file_or_url['path'])  # Add to local files list
             elif file_or_url['type'] == 'url':
                 results += uploader.upload_url(file_or_url['path'])
-    return results
+    return results, local_files
 
 
 def main():
@@ -176,19 +173,21 @@ def main():
     if not args.api_key:
         parser.error('Please specify an API key')
     try:
-        image_urls = upload(args.api_key, images)
-        if args.bbcode:
-            printed_urls = ['[img]{}[/img]'.format(image_url) for image_url in image_urls]
-        else:
-            printed_urls = image_urls
-        print(*printed_urls, sep='\n')
+        image_urls, local_files = upload(args.api_key, images)
+        link_output = '\n'.join(image_urls)
+        bbcode_output = '\n'.join(f'[img]{image_url}[/img]' for image_url in image_urls)
+        combined_output = f"{link_output}\n\n{bbcode_output}"
+        print(combined_output)
         # Copy to clipboard if possible
         if getattr(args, 'clipboard', False):
-            pyperclip.copy('\n'.join(image_urls))
+            pyperclip.copy(combined_output)
         # Ring a terminal if we are in terminal and allowed to do this
         if not args.nobell and stdout.isatty():
             stdout.write('\a')
             stdout.flush()
+        # Delete local files after upload
+        for file in local_files:
+            os.remove(file)
     except (UploadFailed, ValueError) as e:
         parser.error(str(e))
 
